@@ -65,6 +65,17 @@ The rework was smoke-tested end-to-end on synthetic data first, then run on
 the real dataset (`train.csv`: 165,034 rows, `test.csv`: 110,023 rows) to
 produce the numbers above.
 
+## Visualizations
+
+**EDA — target/geography/gender churn rates**
+![EDA overview](assets/eda_overview.png)
+
+**Feature importance (Random Forest, top 20)**
+![Feature importance](assets/feature_importance.png)
+
+**Statistical comparison — CV score distributions, improvement over baselines, paired t-test p-values**
+![Statistical analysis](assets/statistical_analysis.png)
+
 ## Feature Engineering
 Expanded from 12 → 27 features:
 - Ratio features (Balance/Product, CreditScore/Age)
