@@ -1,1 +1,3 @@
 *.joblib
+.omc/
+!.omc/skills/
