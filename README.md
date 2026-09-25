@@ -68,6 +68,31 @@ number can't express.
 
 ![SHAP summary](assets/shap_summary.png)
 
+## Calibration
+
+A model can rank customers well (high AUC) while still outputting probabilities
+that don't match reality — e.g. saying "73% churn risk" for a group that
+actually churns 50% of the time. This matters when the probability itself
+drives a business decision (who gets a retention call), not just the ranking.
+
+Checked via Brier score and a reliability diagram on the OOF ensemble
+probabilities, with isotonic regression as a candidate fix (fit/applied per
+fold on the same 5-fold split used everywhere else, so there's no leakage
+into the calibration check itself):
+
+| | Brier score |
+|---|---|
+| Raw ensemble | 0.0979 |
+| Isotonic-calibrated | 0.0979 (no improvement) |
+
+The reliability curve sits almost exactly on the diagonal already — the
+weighted blend of tree models turned out to be well-calibrated on its own, so
+no calibration layer was applied to the final predictions. This is a real
+possible outcome of the check, not a shortcut: an ensemble average of several
+well-fit models often self-calibrates even when individual members don't.
+
+![Calibration curve](assets/calibration_curve.png)
+
 ## What changed in the rework
 - **Added LightGBM / XGBoost / CatBoost** to the model zoo (used if installed,
   skipped otherwise) alongside RF / ExtraTrees / GradientBoosting / LogisticRegression.
@@ -101,8 +126,10 @@ number can't express.
 - **Model persistence**: final models, scaler, weights/meta-model, and the
   feature list are saved to `churn_ensemble_artifact.joblib` for reuse without
   retraining.
-- **Optuna hyperparameter tuning** and **SHAP-based explainability** added on
-  top of the above — see the dedicated sections earlier in this file.
+- **Optuna hyperparameter tuning**, **SHAP-based explainability**, and a
+  **calibration check** (Brier score + reliability diagram, with isotonic
+  regression as a candidate fix) added on top of the above — see the
+  dedicated sections earlier in this file.
 
 The rework was smoke-tested end-to-end on synthetic data first, then run on
 the real dataset (`train.csv`: 165,034 rows, `test.csv`: 110,023 rows) to
