@@ -46,6 +46,36 @@ against a default-parameter baseline) is the point: RF/ExtraTrees/LightGBM/
 XGBoost/LogisticRegression all improved or matched their default-parameter CV
 AUC after tuning.
 
+## Class Imbalance
+
+Churn rate is 21%, a mild imbalance. AUC is largely insensitive to class
+balance, so it's unlikely to move much either way — but a fixed 0.5-threshold
+classification decision (as opposed to ranking) can still be biased toward
+the majority ("stay") class. Checked directly: `class_weight='balanced'`
+(XGBoost: equivalent `scale_pos_weight`) vs. default, evaluated via 3-fold CV
+on OOF probabilities (RF/ExtraTrees/LightGBM/XGBoost/LogisticRegression;
+`GradientBoostingClassifier`'s sklearn implementation doesn't support
+`class_weight` at all, so it's excluded from this comparison specifically).
+
+| Model | AUC (default) | AUC (balanced) | F1 (default) | F1 (balanced) |
+|-------|---------------|-----------------|---------------|-----------------|
+| Random Forest | 0.8879 | 0.8877 | 0.6235 | 0.6497 |
+| Extra Trees | 0.8869 | 0.8867 | 0.6184 | 0.6427 |
+| Logistic Regression | 0.8782 | 0.8788 | 0.6143 | 0.6220 |
+| LightGBM | 0.8892 | 0.8890 | 0.6340 | 0.6433 |
+| XGBoost | 0.8893 | 0.8892 | 0.6331 | 0.6429 |
+
+Unlike the Optuna and calibration checks, this one comes back positive:
+`class_weight='balanced'` improves F1 by up to +0.026 at a maximum AUC cost of
+only -0.0003 — essentially free. It wasn't folded into the main pipeline
+because this project's actual target metric is AUC-based ranking (the
+Kaggle-style submission), and `class_weight` acts on the 0.5-threshold
+decision, not the ranking that AUC measures — so there's nothing for the main
+pipeline to gain from it here. If the goal shifted from a ranked probability
+output to an actual binary decision (e.g. "who gets a retention call"),
+turning this on would be the right move, and the numbers above already make
+that case.
+
 ## Explainability (SHAP)
 
 Random Forest's impurity-based feature importance is known to be biased toward
@@ -126,8 +156,9 @@ well-fit models often self-calibrates even when individual members don't.
 - **Model persistence**: final models, scaler, weights/meta-model, and the
   feature list are saved to `churn_ensemble_artifact.joblib` for reuse without
   retraining.
-- **Optuna hyperparameter tuning**, **SHAP-based explainability**, and a
-  **calibration check** (Brier score + reliability diagram, with isotonic
+- **Optuna hyperparameter tuning**, a **class imbalance check**
+  (`class_weight='balanced'` vs. default), **SHAP-based explainability**, and
+  a **calibration check** (Brier score + reliability diagram, with isotonic
   regression as a candidate fix) added on top of the above — see the
   dedicated sections earlier in this file.
 
