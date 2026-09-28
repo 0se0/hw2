@@ -1,5 +1,7 @@
 # Bank Customer Churn Prediction
 
+[![CI](https://github.com/0se0/hw2/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/0se0/hw2/actions/workflows/ci.yml)
+
 Predict which bank customers will churn, and find out honestly how much an
 ensemble actually adds over a single tuned model. Out-of-fold (OOF) training of
 six models, a blended ensemble, and an evaluation that avoids the usual
@@ -78,7 +80,7 @@ corrected test cannot reject "no difference", and the bootstrap gap
 
 ```
 src/churn/
-  features.py    feature engineering (train-fitted state passed in explicitly)
+  features.py    input validation + feature engineering (train-fitted state passed in)
   models.py      model zoo + default hyperparameters
   ensemble.py    OOF training, blend-weight search, nested-CV blend score
   stats.py       corrected resampled t-test, paired bootstrap
@@ -86,7 +88,8 @@ src/churn/
   train.py       CLI: train, evaluate, write submission + model artifact
   predict.py     CLI: score new customers with the saved artifact
 params/best_params.json   tuned hyperparameters (from the Optuna run)
-tests/                    pytest suite (16 tests)
+tests/                    pytest suite (23 tests)
+.github/workflows/ci.yml  runs the tests on every push (Python 3.10 and 3.12)
 ML_h2.ipynb               exploratory analysis: EDA, Optuna, SHAP, calibration
 assets/                   charts used in this README
 ```
@@ -105,7 +108,13 @@ pip install pytest && python -m pytest
 `train` writes `submission.csv`, `model.joblib` (the 30 fold models + blend
 weights + feature state, ~0.9 GB, git-ignored) and `metrics.json`. `predict`
 reproduces the training-time test predictions (max difference 4e-8 on the
-real test set; also covered by a test).
+real test set; also covered by a test). Input is validated first: missing
+columns, unseen Geography/Gender values, missing numerics and non-positive Age
+raise a clear error instead of being silently scored (an unseen country used
+to be mapped to NaN and filled with 0, i.e. treated as France).
+
+Tested with Python 3.13 / scikit-learn 1.7–1.9 / LightGBM 4.7 / XGBoost 3.3–3.4;
+the minimum versions in `requirements.txt` are not individually tested.
 
 Notes on the packaged pipeline: Optuna tuning is not re-run by default (the
 tuned parameters live in `params/best_params.json`), and the blend-weight
