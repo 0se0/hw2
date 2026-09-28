@@ -6,23 +6,23 @@ linear models, and gradient boosting libraries.
 
 ## Results (5-fold OOF, real dataset — 165,034 train rows, Optuna-tuned models)
 
-| Model | Default CV AUC | Optuna-tuned CV AUC | Final OOF AUC |
+| Model | Default AUC (3-fold) | Optuna-tuned AUC (3-fold) | Final OOF AUC (5-fold) |
 |-------|----------------|----------------------|---------------|
 | Logistic Regression | 0.8781 | 0.8782 | 0.8782 ± 0.0011 |
 | Extra Trees | 0.8858 | 0.8870 | 0.8869 ± 0.0013 |
-| Random Forest | 0.8877 | 0.8878 | 0.8879 ± 0.0013 |
+| Random Forest | 0.8877 | 0.8879 | 0.8880 ± 0.0013 |
 | Gradient Boosting | — (not tuned, see below) | — | 0.8889 ± 0.0014 |
 | LightGBM | 0.8892 | 0.8893 | 0.8895 ± 0.0013 |
 | XGBoost | 0.8891 | 0.8894 | 0.8895 ± 0.0012 |
 | **Ensemble (weighted blend)** | | | **0.8897 ± 0.0013** |
 
-Optimal blend weights: LGBM 36.1% / XGB 36.1% / GB 17.9% / RF 5.3% / ET 4.7% / LR 0%
+Optimal blend weights: LGBM 37.7% / XGB 33.0% / GB 17.3% / RF 7.9% / ET 4.2% / LR 0%
 (a stacking meta-model was also tried and scored slightly lower — 0.8891 — so the
 weighted blend was kept).
 
 - 95% CI: [0.8886, 0.8908]
 - Statistically significant improvement vs **5 of 6** individual models (p < 0.05);
-  XGBoost was the one exception (p = 0.06) since Optuna tuning brought it almost
+  XGBoost was the one exception (p = 0.065) since Optuna tuning brought it almost
   level with the ensemble itself
 - Predicted test churn rate: 21.12% (actual train churn rate: 21.16%)
 - CatBoost was not installed in the environment this was run in, so it was skipped;
@@ -88,13 +88,14 @@ values on a 2,000-row sample of the training set.
 IsActiveMember, Gender, CreditScore_per_Age, Balance, Is_Germany,
 Active_Card_Interaction, Churn_Risk_Score, Age_CreditScore_Interaction.
 
-This mostly agrees with the RF impurity-based ranking (both surface
-NumOfProducts, Age, IsActiveMember as top drivers) but reorders several
-mid-tier features and — unlike impurity importance — shows *direction*: e.g.
-a high `NumOfProducts` pushes the prediction both strongly up and strongly
-down depending on its value (customers with too many products churn more,
-consistent with `Is_Multi_Product`'s effect), which a single importance
-number can't express.
+This mostly agrees with the RF impurity-based ranking (NumOfProducts, Age and
+IsActiveMember are top drivers in both) but reorders several mid-tier
+features and — unlike impurity importance — shows *direction*. The
+`NumOfProducts` effect is a good example because it is non-monotonic, which a
+single importance number can't express: in the training data churn is 34.7%
+for 1 product, only 6.0% for 2 products, and 88% for 3-4 products, and the
+SHAP plot reflects exactly that (2 products pushes predictions down, 1 pushes
+up moderately, 3-4 pushes up strongly).
 
 ![SHAP summary](assets/shap_summary.png)
 
@@ -122,6 +123,26 @@ possible outcome of the check, not a shortcut: an ensemble average of several
 well-fit models often self-calibrates even when individual members don't.
 
 ![Calibration curve](assets/calibration_curve.png)
+
+## Caveats
+
+- **Optuna results aren't bit-for-bit reproducible.** Each study is capped at
+  25 trials *or* 180 seconds, so the number of completed trials (and
+  therefore the tuned parameters, especially for RF) varies slightly with
+  machine load. Re-running shifts the 4th decimal of some AUCs and the exact
+  blend weights; the conclusions above don't change.
+- **The blend-vs-stacking comparison is not perfectly fair.** Blend weights
+  are optimized on the same OOF predictions the blend's AUC is then measured
+  on (slightly optimistic), whereas the stacking meta-model's score comes
+  from a separate CV over those predictions (honest). The 0.0005 AUC edge of
+  the blend over stacking is within that optimism, so treat the two as
+  roughly tied.
+- **The paired t-tests are optimistic.** The 5 fold scores come from
+  overlapping training sets, so they are not independent; a corrected
+  resampled t-test (Nadeau & Bengio) would give larger p-values. Read the
+  p-values as "consistent direction across folds" rather than exact
+  significance levels, especially since the ensemble-vs-best-single gaps are
+  only ~0.0002 AUC.
 
 ## What changed in the rework
 - **Added LightGBM / XGBoost / CatBoost** to the model zoo (used if installed,
@@ -185,9 +206,9 @@ Expanded from 12 → 27 features:
 - Churn Risk Score (composite indicator)
 
 ## Top Features (Random Forest impurity importance)
-1. NumOfProducts (0.2083)
-2. Age (0.1705)
-3. CreditScore_per_Age (0.0904)
+1. NumOfProducts (0.2118)
+2. Age (0.1620)
+3. CreditScore_per_Age (0.0978)
 
 (see [Explainability (SHAP)](#explainability-shap) above for a less biased,
 direction-aware ranking)
