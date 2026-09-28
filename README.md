@@ -1,161 +1,65 @@
 # Bank Customer Churn Prediction
 
-Binary classification to predict whether a bank customer
-will churn, using an out-of-fold (OOF) ensemble of tree models,
-linear models, and gradient boosting libraries.
+Predict which bank customers will churn, and find out honestly how much an
+ensemble actually adds over a single tuned model. Out-of-fold (OOF) training of
+six models, a blended ensemble, and an evaluation that avoids the usual
+optimistic shortcuts.
 
-## Results (5-fold OOF, real dataset — 165,034 train rows, Optuna-tuned models)
+Data: Kaggle *Binary Classification with a Bank Churn Dataset*
+(165,034 train rows, 110,023 test rows, 21% churn). The data is not included
+in this repo.
 
-| Model | Default AUC (3-fold) | Optuna-tuned AUC (3-fold) | Final OOF AUC (5-fold) |
-|-------|----------------|----------------------|---------------|
+## TL;DR
+
+- **Ensemble AUC 0.8896** (5-fold, nested-CV score, ±0.0013) on a dataset that
+  is close to saturated: every tuned boosting model lands at 0.8889–0.8895.
+- **A single tuned LightGBM (0.8895) is statistically indistinguishable from the
+  6-model ensemble** under a corrected significance test (p = 0.11). The
+  ensemble beats LR, ExtraTrees, RandomForest and GradientBoosting, but for
+  serving, one LightGBM is within 0.0001 AUC while running one model family
+  instead of six.
+- Several "obvious" improvements were checked and **did not help**: Optuna tuning
+  (+0.0001–0.0012), probability calibration (already calibrated, Brier 0.0979),
+  stacking (no better than a weighted blend). They're documented below rather
+  than hidden.
+
+## Results
+
+5-fold OOF AUC on the real data. "Default" and "tuned" are 3-fold CV scores from
+the hyperparameter search; the last column is the 5-fold score used for
+everything else.
+
+| Model | Default (3-fold) | Optuna-tuned (3-fold) | 5-fold AUC |
+|-------|------------------|-----------------------|------------|
 | Logistic Regression | 0.8781 | 0.8782 | 0.8782 ± 0.0011 |
 | Extra Trees | 0.8858 | 0.8870 | 0.8869 ± 0.0013 |
 | Random Forest | 0.8877 | 0.8878 | 0.8879 ± 0.0013 |
-| Gradient Boosting | — (not tuned, see below) | — | 0.8889 ± 0.0014 |
+| Gradient Boosting | not tuned | not tuned | 0.8889 ± 0.0014 |
 | LightGBM | 0.8892 | 0.8893 | 0.8895 ± 0.0013 |
 | XGBoost | 0.8891 | 0.8894 | 0.8895 ± 0.0012 |
-| **Ensemble (weighted blend, nested-CV score)** | | | **0.8896 ± 0.0013** |
+| **Weighted blend (nested CV)** | | | **0.8896 ± 0.0013** |
 
-Optimal blend weights: LGBM 36.7% / XGB 35.6% / GB 17.6% / RF 5.3% / ET 4.8% / LR 0%
+Blend weights: LightGBM 36.7%, XGBoost 35.6%, GradientBoosting 17.6%,
+RandomForest 5.3%, ExtraTrees 4.8%, LogisticRegression 0%.
 
-The ensemble number is a **nested-CV** score: for each fold, weights are fit on
-the other four folds' OOF predictions and scored on the held-out fold, so the
-weight search never sees the data it is scored on (see *Statistical
-evaluation* below). It is not meaningfully better than LightGBM or XGBoost
-alone (0.8895 each) — the gap is ~0.0001 AUC.
+### Is the ensemble really better?
 
-- Predicted test churn rate: 21.12% (actual train churn rate: 21.16%)
-- CatBoost was not installed in the environment this was run in, so it was skipped;
-  installing it may push the ensemble slightly further.
-
-## Hyperparameter Tuning (Optuna)
-
-Instead of hand-picked hyperparameters, RF / ExtraTrees / LogisticRegression /
-LightGBM / XGBoost are each tuned with [Optuna](https://optuna.org)'s TPE
-(Tree-structured Parzen Estimator) sampler, maximizing 3-fold CV AUC (up to 25
-trials or 180 seconds per model, whichever comes first). sklearn's
-`GradientBoostingClassifier` is deliberately excluded from tuning — it doesn't
-support early stopping and is single-threaded, so each trial is far more
-expensive than for the other models; tuning it would dominate total runtime
-for a marginal gain, so it keeps its hand-set defaults.
-
-The gains here are modest (this dataset is close to saturated for these model
-families — the previous manually-tuned parameters were already reasonable),
-but the process itself (defining search spaces, choosing a budget, comparing
-against a default-parameter baseline) is the point: RF/ExtraTrees/LightGBM/
-XGBoost/LogisticRegression all improved or matched their default-parameter CV
-AUC after tuning.
-
-## Class Imbalance
-
-Churn rate is 21%, a mild imbalance. AUC is largely insensitive to class
-balance, so it's unlikely to move much either way — but a fixed 0.5-threshold
-classification decision (as opposed to ranking) can still be biased toward
-the majority ("stay") class. Checked directly: `class_weight='balanced'`
-(XGBoost: equivalent `scale_pos_weight`) vs. default, evaluated via 3-fold CV
-on OOF probabilities (RF/ExtraTrees/LightGBM/XGBoost/LogisticRegression;
-`GradientBoostingClassifier`'s sklearn implementation doesn't support
-`class_weight` at all, so it's excluded from this comparison specifically).
-
-| Model | AUC (default) | AUC (balanced) | F1 (default) | F1 (balanced) |
-|-------|---------------|-----------------|---------------|-----------------|
-| Random Forest | 0.8877 | 0.8876 | 0.6241 | 0.6507 |
-| Extra Trees | 0.8869 | 0.8867 | 0.6184 | 0.6427 |
-| Logistic Regression | 0.8782 | 0.8788 | 0.6143 | 0.6220 |
-| LightGBM | 0.8892 | 0.8890 | 0.6340 | 0.6433 |
-| XGBoost | 0.8893 | 0.8892 | 0.6331 | 0.6429 |
-
-Unlike the Optuna and calibration checks, this one comes back positive:
-`class_weight='balanced'` improves F1 by up to +0.027 at a maximum AUC cost of
-only -0.0003 — essentially free. It wasn't folded into the main pipeline
-because this project's actual target metric is AUC-based ranking (the
-Kaggle-style submission), and `class_weight` acts on the 0.5-threshold
-decision, not the ranking that AUC measures — so there's nothing for the main
-pipeline to gain from it here. If the goal shifted from a ranked probability
-output to an actual binary decision (e.g. "who gets a retention call"),
-turning this on would be the right move, and the numbers above already make
-that case.
-
-## Explainability (SHAP)
-
-Random Forest's impurity-based feature importance is known to be biased toward
-high-cardinality and correlated features. As a more principled alternative,
-[SHAP](https://github.com/shap/shap) (`TreeExplainer`) is run on the
-best-performing individual model by OOF AUC (LightGBM), computing Shapley
-values on a 2,000-row sample of the training set.
-
-**SHAP summary (LightGBM) — top 10 by mean |SHAP|:** NumOfProducts, Age,
-IsActiveMember, Gender, CreditScore_per_Age, Balance, Is_Germany,
-Active_Card_Interaction, Churn_Risk_Score, Age_CreditScore_Interaction.
-
-This mostly agrees with the RF impurity-based ranking (NumOfProducts, Age and
-IsActiveMember are top drivers in both) but reorders several mid-tier
-features and — unlike impurity importance — shows *direction*. The
-`NumOfProducts` effect is a good example because it is non-monotonic, which a
-single importance number can't express: in the training data churn is 34.7%
-for 1 product, only 6.0% for 2 products, and 88% for 3-4 products, and the
-SHAP plot reflects exactly that (2 products pushes predictions down, 1 pushes
-up moderately, 3-4 pushes up strongly).
-
-![SHAP summary](assets/shap_summary.png)
-
-## Calibration
-
-A model can rank customers well (high AUC) while still outputting probabilities
-that don't match reality — e.g. saying "73% churn risk" for a group that
-actually churns 50% of the time. This matters when the probability itself
-drives a business decision (who gets a retention call), not just the ranking.
-
-Checked via Brier score and a reliability diagram on the OOF ensemble
-probabilities, with isotonic regression as a candidate fix (fit/applied per
-fold on the same 5-fold split used everywhere else, so there's no leakage
-into the calibration check itself):
-
-| | Brier score |
-|---|---|
-| Raw ensemble | 0.0979 |
-| Isotonic-calibrated | 0.0979 (no improvement) |
-
-The reliability curve sits almost exactly on the diagonal already — the
-weighted blend of tree models turned out to be well-calibrated on its own, so
-no calibration layer was applied to the final predictions. This is a real
-possible outcome of the check, not a shortcut: an ensemble average of several
-well-fit models often self-calibrates even when individual members don't.
-
-![Calibration curve](assets/calibration_curve.png)
-
-## Statistical evaluation
-
-An earlier version of this notebook overstated how well the ensemble was
-established, for two reasons that are now fixed:
-
-1. **Blend vs. stacking was compared unfairly.** Blend weights were optimized
-   on the same OOF predictions the blend's AUC was measured on, while the
-   stacking meta-model was scored with a separate CV. Both are now scored the
-   same way — the blend via nested CV — and an equal-weight average is
-   included as a no-fitting baseline.
-2. **The paired t-test was optimistic.** The 5 fold scores come from heavily
-   overlapping training sets, so they are not independent and the naive
-   p-values are too small. Results are now reported three ways: the naive
-   paired t-test (for reference), the Nadeau & Bengio (2003) corrected
-   resampled t-test, and a paired bootstrap (1,000 resamples of the 165k OOF
-   rows) giving a 95% CI on the AUC difference.
+Scoring a blend on the same predictions its weights were fit on is optimistic,
+and 5-fold scores are not independent (training sets overlap), which makes a
+naive paired t-test too generous. So the blend is scored with **nested CV**
+(weights for each fold fit on the other four), and significance is reported
+three ways: naive t-test, **Nadeau–Bengio corrected t-test**, and a **paired
+bootstrap** over the 165k OOF rows.
 
 | Method | Fold-mean AUC |
 |---|---|
-| Weighted blend, in-sample (optimistic) | 0.8897 |
-| **Weighted blend, nested CV (fair)** | **0.8896 ± 0.0013** |
-| Stacking (logistic-regression meta-model) | 0.8891 ± 0.0012 |
-| Equal-weight average (no fitting) | 0.8889 ± 0.0012 |
+| Weighted blend, in-sample (biased) | 0.8897 |
+| **Weighted blend, nested CV (fair)** | **0.8896** |
+| Stacking (logistic-regression meta-model) | 0.8891 |
+| Equal-weight average (no fitting) | 0.8889 |
 | Best single model (LightGBM) | 0.8895 |
 
-The in-sample optimism turned out to be tiny (~0.0001), and blend vs. stacking
-(0.0005) is within one fold standard error (0.0006) — effectively a tie.
-Fitting weights buys ~0.0007 over a plain average.
-
-Ensemble vs. each single model:
-
-| vs. | Mean AUC gain | Naive p | Corrected p | Bootstrap 95% CI |
+| Ensemble vs. | AUC gain | Naive p | Corrected p | Bootstrap 95% CI |
 |---|---|---|---|---|
 | Logistic Regression | +0.0114 | <0.0001 | <0.0001 | [+0.0107, +0.0121] |
 | Extra Trees | +0.0027 | 0.0001 | 0.0004 | [+0.0023, +0.0030] |
@@ -164,102 +68,129 @@ Ensemble vs. each single model:
 | LightGBM | +0.0001 | 0.0382 | **0.1121** | [+0.00004, +0.0002] |
 | XGBoost | +0.0001 | 0.1128 | **0.2483** | [+0.00004, +0.0002] |
 
-Reading it honestly: the ensemble is clearly better than LR, ExtraTrees, RF
-and (more narrowly) GradientBoosting. Against LightGBM and XGBoost the
-corrected test does **not** reject "no difference" (p = 0.11 and 0.25); the
-bootstrap CI excludes zero but only by ~0.0001–0.0002 AUC, which is a real
-but practically negligible gap. In practice a tuned LightGBM or XGBoost alone
-is essentially as good as the whole ensemble on this dataset.
+The blend clearly beats the weaker models. Against LightGBM and XGBoost the
+corrected test cannot reject "no difference", and the bootstrap gap
+(~0.0001 AUC) is real but practically irrelevant.
 
-## Remaining caveats
-
-- **Optuna results aren't bit-for-bit reproducible.** Each study is capped at
-  25 trials *or* 180 seconds, so the number of completed trials (and
-  therefore the tuned parameters, especially for RF) varies slightly with
-  machine load between runs. It shifts the 4th decimal of some AUCs and the
-  exact blend weights; the conclusions above don't change.
-- **The bootstrap ignores training variance.** It resamples the evaluation
-  rows of one set of trained models, so it captures test-set noise but not
-  how much results would change with different training data. The
-  Nadeau-Bengio test accounts for that but has only 4 degrees of freedom, so
-  it has little power — which is why both are shown.
-- **Nested-CV blending shares stacking's mild leak.** The OOF predictions used
-  to fit weights for one fold came from base models that had seen that fold's
-  rows. This applies equally to the stacking score, so the comparison stays
-  fair, but both are slightly optimistic relative to a fully separate holdout.
-
-## What changed in the rework
-- **Added LightGBM / XGBoost / CatBoost** to the model zoo (used if installed,
-  skipped otherwise) alongside RF / ExtraTrees / GradientBoosting / LogisticRegression.
-- **Out-of-fold (OOF) evaluation** instead of a single 80/20 train/val split:
-  every model now produces predictions for the *entire* training set via
-  5-fold CV, so ensemble weights are fit on ~5x more validation data and are
-  far less likely to overfit to one particular split.
-- **Fold-averaged test predictions (bagging)**: test predictions are the
-  average of 5 fold-models per base model, instead of a single model fit on
-  80% of the data — this lowers prediction variance on the leaderboard set.
-- **Ensemble weight search replaced**: the old approach was a brute-force
-  grid over 6 discrete weight values. AUC is a rank-based, non-smooth
-  objective, so a gradient-based optimizer (SLSQP) was tried and verified to
-  get stuck at its initial guess; `scipy.optimize.differential_evolution`
-  (derivative-free) is used instead and empirically finds real improvements.
-- **Stacking added as an alternative** to weighted blending: a logistic
-  regression meta-model trained on OOF predictions, evaluated via its own
-  CV, is compared against the weighted blend, and whichever wins is used.
-- **Fixed a train/test leakage-style bug**: `Is_High_Value` used to threshold
-  each dataset against its own `Balance` 80th percentile, so train and test
-  used different, inconsistent cutoffs. The threshold is now computed once on
-  train and reused for both.
-- **Statistical significance testing consolidated**: the old notebook
-  retrained every model a second time (via `cross_val_score`) just to run the
-  paired t-tests. The rework reuses the per-fold AUCs already produced during
-  OOF generation — same statistical test, no duplicate training.
-- **Colab dependency removed from the core pipeline**: the notebook reads
-  `train.csv`/`test.csv` from disk (or `CHURN_DATA_DIR`) when available, and
-  only falls back to `google.colab.files.upload()`/`download()` when actually
-  running in Colab, so it also runs locally or in any other Jupyter environment.
-- **Model persistence**: final models, scaler, weights/meta-model, and the
-  feature list are saved to `churn_ensemble_artifact.joblib` for reuse without
-  retraining.
-- **Fair ensemble evaluation**: nested-CV blend score, equal-weight baseline,
-  Nadeau-Bengio corrected t-test and paired bootstrap (see *Statistical
-  evaluation*).
-- **Optuna hyperparameter tuning**, a **class imbalance check**
-  (`class_weight='balanced'` vs. default), **SHAP-based explainability**, and
-  a **calibration check** (Brier score + reliability diagram, with isotonic
-  regression as a candidate fix) added on top of the above — see the
-  dedicated sections earlier in this file.
-
-The rework was smoke-tested end-to-end on synthetic data first, then run on
-the real dataset (`train.csv`: 165,034 rows, `test.csv`: 110,023 rows) to
-produce the numbers above.
-
-## Visualizations
-
-**EDA — target/geography/gender churn rates**
-![EDA overview](assets/eda_overview.png)
-
-**Feature importance (Random Forest, top 20)**
-![Feature importance](assets/feature_importance.png)
-
-**Statistical comparison — CV score distributions, improvement over baselines, paired t-test p-values**
 ![Statistical analysis](assets/statistical_analysis.png)
 
-## Feature Engineering
-Expanded from 12 → 27 features:
-- Ratio features (Balance/Product, CreditScore/Age)
-- Interaction features (Age × CreditScore)
-- Binary flags (Is_Germany, Is_Senior, Is_Multi_Product)
-- Churn Risk Score (composite indicator)
+## Repo layout
 
-## Top Features (Random Forest impurity importance)
-1. NumOfProducts (0.2083)
-2. Age (0.1705)
-3. CreditScore_per_Age (0.0904)
+```
+src/churn/
+  features.py    feature engineering (train-fitted state passed in explicitly)
+  models.py      model zoo + default hyperparameters
+  ensemble.py    OOF training, blend-weight search, nested-CV blend score
+  stats.py       corrected resampled t-test, paired bootstrap
+  metrics.py     rank-based AUC (verified against sklearn)
+  train.py       CLI: train, evaluate, write submission + model artifact
+  predict.py     CLI: score new customers with the saved artifact
+params/best_params.json   tuned hyperparameters (from the Optuna run)
+tests/                    pytest suite (16 tests)
+ML_h2.ipynb               exploratory analysis: EDA, Optuna, SHAP, calibration
+assets/                   charts used in this README
+```
 
-(see [Explainability (SHAP)](#explainability-shap) above for a less biased,
-direction-aware ranking)
+## Quickstart
+
+```bash
+pip install -r requirements.txt
+# put train.csv and test.csv in ./data (or pass --data-dir)
+PYTHONPATH=src python -m churn.train --data-dir data --out-dir artifacts
+PYTHONPATH=src python -m churn.predict --model artifacts/model.joblib \
+    --input data/test.csv --output artifacts/preds.csv
+pip install pytest && python -m pytest
+```
+
+`train` writes `submission.csv`, `model.joblib` (the 30 fold models + blend
+weights + feature state, ~0.9 GB, git-ignored) and `metrics.json`. `predict`
+reproduces the training-time test predictions (max difference 4e-8 on the
+real test set; also covered by a test).
+
+Notes on the packaged pipeline: Optuna tuning is not re-run by default (the
+tuned parameters live in `params/best_params.json`), and the blend-weight
+search uses a cheaper differential-evolution setting (`maxiter=100`,
+`popsize=10`) than the notebook (`300`/`15`). A full run on the real data took
+about 22 minutes on a laptop (mostly GradientBoosting fits), versus roughly 80
+minutes for the notebook with tuning and the full weight search.
+
+Checked against the notebook on the real data: the per-fold AUCs of all six
+models match to 4 decimals, the nested blend score is 0.8896 in both, and the
+test predictions rank-correlate at 0.9999999 with the notebook's submission
+(the blend weights differ slightly because of the cheaper search).
+
+## Methodology and decisions
+
+**Out-of-fold training.** Every model is trained on each of 5 stratified
+folds. OOF predictions cover the whole training set, so blend weights are fit
+on ~5x more held-out data than a single split would give, and test
+predictions are the average of the 5 fold models.
+
+**Blend-weight search.** AUC is a step function of the weights, so its
+gradient is ~0 almost everywhere and SLSQP simply returned its starting point
+(verified). Differential evolution needs no gradient and finds real
+improvements.
+
+**Feature engineering (12 → 27 features).** Ratio, interaction and flag
+features plus a churn-risk score. One bug fixed along the way: `Is_High_Value`
+used each dataset's own Balance 80th percentile, so train and test used
+different cutoffs. The threshold is now fit on train and passed in; a test
+asserts a row's features don't depend on the rows it's scored with.
+
+**Hyperparameter tuning (Optuna, notebook).** TPE sampler, 3-fold CV AUC, up to
+25 trials or 180 s per model, for RF / ExtraTrees / LR / LightGBM / XGBoost.
+sklearn's `GradientBoostingClassifier` was left out: no early stopping and
+single-threaded, so each trial is far more expensive. Gains were small
+(0.0001–0.0012) because the dataset is near saturation.
+
+**Class imbalance (21% churn).** `class_weight='balanced'` (XGBoost:
+`scale_pos_weight`) vs. default, 3-fold CV:
+
+| Model | AUC default | AUC balanced | F1 default | F1 balanced |
+|-------|-------------|--------------|------------|-------------|
+| Random Forest | 0.8877 | 0.8876 | 0.6241 | 0.6507 |
+| Extra Trees | 0.8869 | 0.8867 | 0.6184 | 0.6427 |
+| Logistic Regression | 0.8782 | 0.8788 | 0.6143 | 0.6220 |
+| LightGBM | 0.8892 | 0.8890 | 0.6340 | 0.6433 |
+| XGBoost | 0.8893 | 0.8892 | 0.6331 | 0.6429 |
+
+F1 at a 0.5 threshold improves by up to +0.027 at essentially no AUC cost. It
+is not used in the pipeline because the target metric is AUC (ranking), which
+`class_weight` doesn't change; it would be the right switch if the goal were a
+hard "call / don't call" decision.
+
+**Calibration.** Brier score and a reliability diagram on the OOF ensemble
+probabilities, with isotonic regression (fit per fold, no leakage) as the
+candidate fix. Brier is 0.0979 before and after: the blend is already
+well-calibrated, so no calibration layer is applied.
+
+![Calibration curve](assets/calibration_curve.png)
+
+**Explainability (SHAP).** TreeSHAP on the best single model (LightGBM),
+2,000-row sample. Top features: NumOfProducts, Age, IsActiveMember, Gender,
+CreditScore_per_Age. Unlike impurity importance, SHAP shows direction:
+`NumOfProducts` is non-monotonic (churn is 34.7% with 1 product, 6.0% with 2,
+88% with 3–4), and the plot reflects that.
+
+![SHAP summary](assets/shap_summary.png)
+
+## Caveats
+
+- **Tuning isn't bit-for-bit reproducible in the notebook.** Optuna studies are
+  time-capped, so the number of completed trials varies with machine load;
+  the 4th decimal of some AUCs and the exact blend weights shift between runs.
+  The packaged pipeline avoids this by reading fixed parameters from JSON.
+- **The bootstrap ignores training variance** (it resamples evaluation rows of
+  one set of trained models). The Nadeau–Bengio test covers that but has only
+  4 degrees of freedom, hence little power; both are shown for that reason.
+- **Nested-CV blending shares stacking's mild leak.** OOF predictions used to
+  fit one fold's weights came from models that had seen that fold's rows. The
+  comparison between blend and stacking stays fair, but both are slightly
+  optimistic versus a fully separate holdout.
+- CatBoost was not installed where this was run; it is picked up automatically
+  if available.
 
 ## Tech
-Python, Scikit-learn, LightGBM, XGBoost, (CatBoost if installed), Optuna,
-SHAP, SciPy, Pandas, NumPy, Matplotlib, Seaborn, Joblib
+
+Python, scikit-learn, LightGBM, XGBoost, Optuna, SHAP, SciPy, pandas, NumPy,
+joblib, pytest.
