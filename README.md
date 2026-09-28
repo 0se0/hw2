@@ -10,20 +10,20 @@ linear models, and gradient boosting libraries.
 |-------|----------------|----------------------|---------------|
 | Logistic Regression | 0.8781 | 0.8782 | 0.8782 ± 0.0011 |
 | Extra Trees | 0.8858 | 0.8870 | 0.8869 ± 0.0013 |
-| Random Forest | 0.8877 | 0.8879 | 0.8880 ± 0.0013 |
+| Random Forest | 0.8877 | 0.8878 | 0.8879 ± 0.0013 |
 | Gradient Boosting | — (not tuned, see below) | — | 0.8889 ± 0.0014 |
 | LightGBM | 0.8892 | 0.8893 | 0.8895 ± 0.0013 |
 | XGBoost | 0.8891 | 0.8894 | 0.8895 ± 0.0012 |
-| **Ensemble (weighted blend)** | | | **0.8897 ± 0.0013** |
+| **Ensemble (weighted blend, nested-CV score)** | | | **0.8896 ± 0.0013** |
 
-Optimal blend weights: LGBM 37.7% / XGB 33.0% / GB 17.3% / RF 7.9% / ET 4.2% / LR 0%
-(a stacking meta-model was also tried and scored slightly lower — 0.8891 — so the
-weighted blend was kept).
+Optimal blend weights: LGBM 36.7% / XGB 35.6% / GB 17.6% / RF 5.3% / ET 4.8% / LR 0%
 
-- 95% CI: [0.8886, 0.8908]
-- Statistically significant improvement vs **5 of 6** individual models (p < 0.05);
-  XGBoost was the one exception (p = 0.065) since Optuna tuning brought it almost
-  level with the ensemble itself
+The ensemble number is a **nested-CV** score: for each fold, weights are fit on
+the other four folds' OOF predictions and scored on the held-out fold, so the
+weight search never sees the data it is scored on (see *Statistical
+evaluation* below). It is not meaningfully better than LightGBM or XGBoost
+alone (0.8895 each) — the gap is ~0.0001 AUC.
+
 - Predicted test churn rate: 21.12% (actual train churn rate: 21.16%)
 - CatBoost was not installed in the environment this was run in, so it was skipped;
   installing it may push the ensemble slightly further.
@@ -59,14 +59,14 @@ on OOF probabilities (RF/ExtraTrees/LightGBM/XGBoost/LogisticRegression;
 
 | Model | AUC (default) | AUC (balanced) | F1 (default) | F1 (balanced) |
 |-------|---------------|-----------------|---------------|-----------------|
-| Random Forest | 0.8879 | 0.8877 | 0.6235 | 0.6497 |
+| Random Forest | 0.8877 | 0.8876 | 0.6241 | 0.6507 |
 | Extra Trees | 0.8869 | 0.8867 | 0.6184 | 0.6427 |
 | Logistic Regression | 0.8782 | 0.8788 | 0.6143 | 0.6220 |
 | LightGBM | 0.8892 | 0.8890 | 0.6340 | 0.6433 |
 | XGBoost | 0.8893 | 0.8892 | 0.6331 | 0.6429 |
 
 Unlike the Optuna and calibration checks, this one comes back positive:
-`class_weight='balanced'` improves F1 by up to +0.026 at a maximum AUC cost of
+`class_weight='balanced'` improves F1 by up to +0.027 at a maximum AUC cost of
 only -0.0003 — essentially free. It wasn't folded into the main pipeline
 because this project's actual target metric is AUC-based ranking (the
 Kaggle-style submission), and `class_weight` acts on the 0.5-threshold
@@ -124,25 +124,69 @@ well-fit models often self-calibrates even when individual members don't.
 
 ![Calibration curve](assets/calibration_curve.png)
 
-## Caveats
+## Statistical evaluation
+
+An earlier version of this notebook overstated how well the ensemble was
+established, for two reasons that are now fixed:
+
+1. **Blend vs. stacking was compared unfairly.** Blend weights were optimized
+   on the same OOF predictions the blend's AUC was measured on, while the
+   stacking meta-model was scored with a separate CV. Both are now scored the
+   same way — the blend via nested CV — and an equal-weight average is
+   included as a no-fitting baseline.
+2. **The paired t-test was optimistic.** The 5 fold scores come from heavily
+   overlapping training sets, so they are not independent and the naive
+   p-values are too small. Results are now reported three ways: the naive
+   paired t-test (for reference), the Nadeau & Bengio (2003) corrected
+   resampled t-test, and a paired bootstrap (1,000 resamples of the 165k OOF
+   rows) giving a 95% CI on the AUC difference.
+
+| Method | Fold-mean AUC |
+|---|---|
+| Weighted blend, in-sample (optimistic) | 0.8897 |
+| **Weighted blend, nested CV (fair)** | **0.8896 ± 0.0013** |
+| Stacking (logistic-regression meta-model) | 0.8891 ± 0.0012 |
+| Equal-weight average (no fitting) | 0.8889 ± 0.0012 |
+| Best single model (LightGBM) | 0.8895 |
+
+The in-sample optimism turned out to be tiny (~0.0001), and blend vs. stacking
+(0.0005) is within one fold standard error (0.0006) — effectively a tie.
+Fitting weights buys ~0.0007 over a plain average.
+
+Ensemble vs. each single model:
+
+| vs. | Mean AUC gain | Naive p | Corrected p | Bootstrap 95% CI |
+|---|---|---|---|---|
+| Logistic Regression | +0.0114 | <0.0001 | <0.0001 | [+0.0107, +0.0121] |
+| Extra Trees | +0.0027 | 0.0001 | 0.0004 | [+0.0023, +0.0030] |
+| Random Forest | +0.0018 | 0.0008 | 0.0036 | [+0.0015, +0.0021] |
+| Gradient Boosting | +0.0007 | 0.0086 | 0.0328 | [+0.0005, +0.0009] |
+| LightGBM | +0.0001 | 0.0382 | **0.1121** | [+0.00004, +0.0002] |
+| XGBoost | +0.0001 | 0.1128 | **0.2483** | [+0.00004, +0.0002] |
+
+Reading it honestly: the ensemble is clearly better than LR, ExtraTrees, RF
+and (more narrowly) GradientBoosting. Against LightGBM and XGBoost the
+corrected test does **not** reject "no difference" (p = 0.11 and 0.25); the
+bootstrap CI excludes zero but only by ~0.0001–0.0002 AUC, which is a real
+but practically negligible gap. In practice a tuned LightGBM or XGBoost alone
+is essentially as good as the whole ensemble on this dataset.
+
+## Remaining caveats
 
 - **Optuna results aren't bit-for-bit reproducible.** Each study is capped at
   25 trials *or* 180 seconds, so the number of completed trials (and
   therefore the tuned parameters, especially for RF) varies slightly with
-  machine load. Re-running shifts the 4th decimal of some AUCs and the exact
-  blend weights; the conclusions above don't change.
-- **The blend-vs-stacking comparison is not perfectly fair.** Blend weights
-  are optimized on the same OOF predictions the blend's AUC is then measured
-  on (slightly optimistic), whereas the stacking meta-model's score comes
-  from a separate CV over those predictions (honest). The 0.0005 AUC edge of
-  the blend over stacking is within that optimism, so treat the two as
-  roughly tied.
-- **The paired t-tests are optimistic.** The 5 fold scores come from
-  overlapping training sets, so they are not independent; a corrected
-  resampled t-test (Nadeau & Bengio) would give larger p-values. Read the
-  p-values as "consistent direction across folds" rather than exact
-  significance levels, especially since the ensemble-vs-best-single gaps are
-  only ~0.0002 AUC.
+  machine load between runs. It shifts the 4th decimal of some AUCs and the
+  exact blend weights; the conclusions above don't change.
+- **The bootstrap ignores training variance.** It resamples the evaluation
+  rows of one set of trained models, so it captures test-set noise but not
+  how much results would change with different training data. The
+  Nadeau-Bengio test accounts for that but has only 4 degrees of freedom, so
+  it has little power — which is why both are shown.
+- **Nested-CV blending shares stacking's mild leak.** The OOF predictions used
+  to fit weights for one fold came from base models that had seen that fold's
+  rows. This applies equally to the stacking score, so the comparison stays
+  fair, but both are slightly optimistic relative to a fully separate holdout.
 
 ## What changed in the rework
 - **Added LightGBM / XGBoost / CatBoost** to the model zoo (used if installed,
@@ -177,6 +221,9 @@ well-fit models often self-calibrates even when individual members don't.
 - **Model persistence**: final models, scaler, weights/meta-model, and the
   feature list are saved to `churn_ensemble_artifact.joblib` for reuse without
   retraining.
+- **Fair ensemble evaluation**: nested-CV blend score, equal-weight baseline,
+  Nadeau-Bengio corrected t-test and paired bootstrap (see *Statistical
+  evaluation*).
 - **Optuna hyperparameter tuning**, a **class imbalance check**
   (`class_weight='balanced'` vs. default), **SHAP-based explainability**, and
   a **calibration check** (Brier score + reliability diagram, with isotonic
@@ -206,9 +253,9 @@ Expanded from 12 → 27 features:
 - Churn Risk Score (composite indicator)
 
 ## Top Features (Random Forest impurity importance)
-1. NumOfProducts (0.2118)
-2. Age (0.1620)
-3. CreditScore_per_Age (0.0978)
+1. NumOfProducts (0.2083)
+2. Age (0.1705)
+3. CreditScore_per_Age (0.0904)
 
 (see [Explainability (SHAP)](#explainability-shap) above for a less biased,
 direction-aware ranking)
