@@ -90,7 +90,7 @@ src/churn/
 params/best_params.json   tuned hyperparameters (from the Optuna run)
 tests/                    pytest suite (23 tests)
 .github/workflows/ci.yml  runs the tests on every push (Python 3.10 and 3.12)
-ML_h2.ipynb               exploratory analysis: EDA, Optuna, SHAP, calibration
+notebooks/ML_h2.ipynb     exploratory analysis: EDA, Optuna, SHAP, calibration
 assets/                   charts used in this README
 ```
 
